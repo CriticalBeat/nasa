@@ -171,21 +171,24 @@ export default function Home() {
   };
 
   // ---- MAP CLICK ----
+  // handleMapClick
   const handleMapClick = async ({ lat, lon }) => {
     try {
-      // Reverse geocode
-      const geoRes = await fetch(
-        `https://geocoding-api.open-meteo.com/v1/reverse?latitude=${lat}&longitude=${lon}&language=en`
-      );
+      const geoRes = await fetch(`/api/geocode?lat=${lat}&lon=${lon}`);
       const geoJson = await geoRes.json();
-      const locationName = geoJson.results?.[0]
-        ? `${geoJson.results[0].name}, ${geoJson.results[0].country_code}`
-        : `Lat ${lat.toFixed(2)}, Lon ${lon.toFixed(2)}`;
 
-      setLocation({ lat, lon, name: locationName });
-      setInputCity(""); // clear input to avoid conflicts
+      let name = `Lat ${lat.toFixed(2)}, Lon ${lon.toFixed(2)}`;
+      if (geoJson.results?.length) {
+        name = `${geoJson.results[0].name}, ${geoJson.results[0].country_code}`;
+      }
+
+      const coords = { name, lat, lon };
+      setLocation(coords);
+      setInputCity("");
+
+      // then fetch weather & AQI as before...
     } catch (err) {
-      console.error("Reverse geocode error:", err);
+      console.error("Map click fetch error:", err);
     }
   };
 
