@@ -24,10 +24,10 @@ export default function WeatherMap({ coords, setCoords }) {
   if (!coords) return <p className="text-center p-4">Loading map...</p>;
 
   return (
-    <div className="h-80 mb-6 border rounded overflow-hidden">
+    <div className="h-96 mb-6 border rounded overflow-hidden">
       <MapContainer
         center={[coords.lat, coords.lon]}
-        zoom={5}
+        zoom={6}
         style={{ height: "100%", width: "100%" }}
       >
         <TileLayer
