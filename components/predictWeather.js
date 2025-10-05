@@ -47,7 +47,7 @@ const globalTempAnomaly = {
   2025: 1.2,
 };
 
-// Convert date string to month-day ("MM-DD")
+// Convert date string to "MM-DD"
 function getMonthDay(dateStr) {
   const d = new Date(dateStr);
   return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(
@@ -55,26 +55,33 @@ function getMonthDay(dateStr) {
   ).padStart(2, "0")}`;
 }
 
-// Fetch historical data
-async function getHistoricalData(lat, lon, startYear = 1984, endYear = 2025) {
+// Fetch historical data for a **specific calendar day** across all years
+async function getSpecificDayData(
+  lat,
+  lon,
+  monthDay,
+  startYear = 1984,
+  endYear = 2025
+) {
   const data = [];
   for (let year = startYear; year <= endYear; year++) {
     const yearData = await fetchYearWeather(year, lat, lon);
     const anomaly = globalTempAnomaly[year] || 1.0;
-    yearData.forEach((d) => {
-      const monthDay = getMonthDay(d.date);
-      data.push({ ...d, monthDay, year, anomaly });
-    });
+
+    // Find only the data for the exact month/day
+    const dayData = yearData.find((d) => getMonthDay(d.date) === monthDay);
+    if (dayData) data.push({ ...dayData, year, anomaly });
   }
   return data;
 }
 
-// Train models per calendar day and cache them
-let cachedDayModels = null;
-export async function getDayModels(lat, lon) {
-  if (cachedDayModels) return cachedDayModels;
+// Cache models per day
+let cachedDayModels = {};
+export async function getDayModels(lat, lon, monthDay) {
+  if (cachedDayModels[monthDay]) return cachedDayModels[monthDay];
 
-  const historical = await getHistoricalData(lat, lon);
+  const historical = await getSpecificDayData(lat, lon, monthDay);
+
   const targets = [
     "temp_c",
     "temp_max_c",
@@ -88,26 +95,15 @@ export async function getDayModels(lat, lon) {
     "cloud_cover_percent",
   ];
 
-  const dayModels = {};
-  const dayGroups = {};
-
-  historical.forEach((d) => {
-    if (!dayGroups[d.monthDay]) dayGroups[d.monthDay] = [];
-    dayGroups[d.monthDay].push(d);
+  const models = {};
+  targets.forEach((target) => {
+    const X = historical.map((d) => [d.year, d.anomaly]);
+    const y = historical.map((d) => [d[target]]);
+    if (X.length >= 2) models[target] = new MLR(X, y); // Only train if ≥2 points
   });
 
-  Object.keys(dayGroups).forEach((monthDay) => {
-    const group = dayGroups[monthDay];
-    dayModels[monthDay] = {};
-    targets.forEach((target) => {
-      const X = group.map((d) => [d.year, d.anomaly]);
-      const y = group.map((d) => [d[target]]);
-      dayModels[monthDay][target] = new MLR(X, y);
-    });
-  });
-
-  cachedDayModels = dayModels;
-  return dayModels;
+  cachedDayModels[monthDay] = models;
+  return models;
 }
 
 // Predict weather for a specific date
@@ -121,19 +117,16 @@ export async function predictWeather(lat, lon, dateInput) {
   const [year] = dateStr.split("-").map(Number);
   const monthDay = dateStr.slice(5); // "MM-DD"
 
-  const dayModels = await getDayModels(lat, lon);
+  const dayModels = await getDayModels(lat, lon, monthDay);
+  if (!Object.keys(dayModels).length)
+    return { error: "Not enough historical data" };
+
   const anomaly = globalTempAnomaly[year] || 1.3;
-
-  if (!dayModels[monthDay])
-    return { error: "No historical data for this date" };
-
   const input = [year, anomaly];
-  const predictedDay = { date: dateStr };
 
-  Object.keys(dayModels[monthDay]).forEach((key) => {
-    predictedDay[key] = parseFloat(
-      dayModels[monthDay][key].predict(input)[0].toFixed(2)
-    );
+  const predictedDay = { date: dateStr };
+  Object.keys(dayModels).forEach((key) => {
+    predictedDay[key] = parseFloat(dayModels[key].predict(input)[0].toFixed(2));
   });
 
   return predictedDay;
