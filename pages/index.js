@@ -4,12 +4,11 @@ import { motion } from "framer-motion";
 import Head from "next/head";
 import dynamic from "next/dynamic";
 
-// Dynamically import Leaflet map (to avoid SSR issues)
+// Dynamically import Leaflet map to avoid SSR issues
 const WeatherMap = dynamic(() => import("../components/map"), {
   ssr: false,
 });
 
-// Default location
 const DEFAULT_LOCATION = { name: "Ulaanbaatar, MN", lat: 47.921, lon: 106.918 };
 
 export default function Home() {
@@ -53,7 +52,7 @@ export default function Home() {
         );
         const weatherJson = await weatherRes.json();
 
-        // Air Quality API
+        // AQI API
         const aqiRes = await fetch(
           `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${coords.lat}&longitude=${coords.lon}&hourly=us_aqi&timezone=auto`
         );
@@ -171,83 +170,22 @@ export default function Home() {
     return "Unknown";
   };
 
-  // ---- HANDLE MAP COORDINATE CLICK ----
-  // ---- HANDLE MAP COORDINATE CLICK ----
+  // ---- MAP CLICK ----
   const handleMapClick = async ({ lat, lon }) => {
-    const coords = {
-      name: `Lat ${lat.toFixed(2)}, Lon ${lon.toFixed(2)}`,
-      lat,
-      lon,
-    };
-    setLocation(coords);
-    setInputCity("");
-
     try {
-      // Fetch weather data
-      const weatherRes = await fetch(
-        `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=sunrise,sunset&hourly=temperature_2m,apparent_temperature,weather_code,precipitation,wind_speed_10m,relative_humidity_2m&current_weather=true&timezone=auto`
+      // Reverse geocode
+      const geoRes = await fetch(
+        `https://geocoding-api.open-meteo.com/v1/reverse?latitude=${lat}&longitude=${lon}&language=en`
       );
-      const weatherJson = await weatherRes.json();
+      const geoJson = await geoRes.json();
+      const locationName = geoJson.results?.[0]
+        ? `${geoJson.results[0].name}, ${geoJson.results[0].country_code}`
+        : `Lat ${lat.toFixed(2)}, Lon ${lon.toFixed(2)}`;
 
-      // Fetch AQI
-      const aqiRes = await fetch(
-        `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}&hourly=us_aqi&timezone=auto`
-      );
-      const aqiJson = await aqiRes.json();
-
-      const latestAqi =
-        aqiJson?.hourly?.us_aqi?.[aqiJson.hourly.us_aqi.length - 1] || null;
-      const aqiLabel = getAqiLabel(latestAqi);
-
-      // Prepare hourly forecast (6 hours)
-      const nowHour = new Date().getHours();
-      const hourly = Array.from({ length: 6 }, (_, i) => {
-        const idx = Math.min(nowHour + i, weatherJson.hourly.time.length - 1);
-        const temp = Math.round(weatherJson.hourly.temperature_2m[idx]);
-        const feelsLike = Math.round(
-          weatherJson.hourly.apparent_temperature[idx]
-        );
-        const wind = Math.round(weatherJson.hourly.wind_speed_10m[idx]);
-        const humidity = weatherJson.hourly.relative_humidity_2m[idx];
-        const precipitation = weatherJson.hourly.precipitation[idx];
-
-        return {
-          time:
-            i === 0
-              ? "Now"
-              : `${new Date(weatherJson.hourly.time[idx]).getHours()}:00`,
-          temp,
-          feelsLike,
-          icon: weatherCodeToEmoji(weatherJson.hourly.weather_code[idx]),
-          precipitation,
-          wind,
-          humidity,
-          wci: calculateWCI({ temp, wind, humidity, precipitation }),
-        };
-      });
-
-      const wci = hourly[0].wci;
-
-      // Update all data at once
-      setData({
-        location: coords.name,
-        temperature: Math.round(weatherJson.current_weather.temperature),
-        feelsLike: hourly[0].feelsLike,
-        condition: weatherCodeToText(weatherJson.current_weather.weathercode),
-        wind: Math.round(weatherJson.current_weather.windspeed),
-        humidity: hourly[0].humidity,
-        precipitation: hourly[0].precipitation,
-        wci,
-        wciLabel: getWciLabel(wci),
-        hourly,
-        daily: weatherJson.daily,
-        aqi: latestAqi,
-        aqiLabel,
-      });
-
-      setLastUpdate(new Date().toLocaleTimeString());
+      setLocation({ lat, lon, name: locationName });
+      setInputCity(""); // clear input to avoid conflicts
     } catch (err) {
-      console.error("Map click fetch error:", err);
+      console.error("Reverse geocode error:", err);
     }
   };
 
@@ -281,8 +219,6 @@ export default function Home() {
             Search
           </button>
         </div>
-
-        {/* Map Toggle Button */}
         <button
           onClick={() => setShowMap(!showMap)}
           className="px-4 py-2 bg-emerald-500 text-white rounded-lg"
@@ -300,7 +236,7 @@ export default function Home() {
         </div>
       )}
 
-      {/* Main */}
+      {/* Main Content */}
       <main className="flex-1 flex justify-center p-6">
         <div className="w-full max-w-6xl flex flex-col gap-6">
           {/* Weather Info */}
@@ -332,14 +268,27 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* Weather Comfort Index Box */}
-              <div className="w-full md:w-1/2 rounded-xl p-4 sm:p-6 bg-gradient-to-r from-emerald-400 to-sky-400 shadow-md flex flex-col items-center">
-                <p className="text-sm font-medium text-white/90">
-                  Weather Comfort Index
-                </p>
-                <p className="text-2xl font-bold mt-2">{data.wci}/100</p>
-                <p className="text-sm text-white/80 mt-1">{data.wciLabel}</p>
-              </div>
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className={`rounded-xl p-4 sm:p-6 bg-gradient-to-r ${getWCIGradient(
+                  data.wci
+                )} shadow-md w-full md:w-1/2`}
+              >
+                <div className="flex items-baseline justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-white/90">
+                      Weather Comfort Index
+                    </p>
+                    <p className="text-xs text-white/80 mt-1">
+                      {data.wciLabel}
+                    </p>
+                  </div>
+                  <div className="text-4xl md:text-5xl font-bold text-white">
+                    {data.wci}/100
+                  </div>
+                </div>
+              </motion.div>
             </div>
 
             {/* Main Weather + AQI */}
@@ -362,25 +311,45 @@ export default function Home() {
                 <div className="mt-6 overflow-x-auto">
                   <div className="flex gap-3 items-center">
                     {data.hourly.map((h) => (
-                      <div
+                      <motion.div
                         key={h.time}
+                        whileHover={{ y: -6 }}
                         className="min-w-[84px] p-3 rounded-xl bg-gray-50 border border-gray-100 text-center"
                       >
                         <div className="text-sm text-gray-500">{h.time}</div>
                         <div className="mt-2 text-lg">{h.icon}</div>
                         <div className="text-sm mt-1">{h.temp}°</div>
-                      </div>
+                        <div className="text-xs text-gray-400">
+                          Feels {h.feelsLike}°
+                        </div>
+                        <div className="h-2 w-full bg-gray-200 rounded-full mt-1 overflow-hidden">
+                          <div
+                            className={`h-full bg-gradient-to-r ${getWCIGradient(
+                              h.wci
+                            )}`}
+                            style={{ width: `${h.wci}%` }}
+                          ></div>
+                        </div>
+                      </motion.div>
                     ))}
                   </div>
                 </div>
               </div>
 
-              {/* Air Quality Index Box */}
+              {/* Sidebar */}
               <div className="w-full md:w-1/2 rounded-xl p-6 bg-white shadow-sm border border-gray-100 flex flex-col justify-center items-center">
                 <p className="text-sm text-gray-500">Air Quality Index</p>
                 <div className="text-2xl font-bold mt-2">{data.aqi}</div>
                 <div className="text-sm text-gray-600 mt-1">
                   {data.aqiLabel}
+                </div>
+
+                <div className="mt-4 w-full bg-gray-50 rounded-lg p-3 text-center text-sm">
+                  <div className="font-medium">What to wear</div>
+                  <div className="text-xs text-gray-400">
+                    Light jacket recommended • Comfortable for outdoor
+                    activities
+                  </div>
                 </div>
               </div>
             </div>
