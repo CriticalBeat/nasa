@@ -2,6 +2,12 @@
 import React, { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import Head from "next/head";
+import dynamic from "next/dynamic";
+
+// Dynamically import Leaflet map (to avoid SSR issues)
+const WeatherMap = dynamic(() => import("../components/map"), {
+  ssr: false,
+});
 
 // Default location
 const DEFAULT_LOCATION = { name: "Ulaanbaatar, MN", lat: 47.921, lon: 106.918 };
@@ -12,6 +18,7 @@ export default function Home() {
   const [lastUpdate, setLastUpdate] = useState("");
   const [location, setLocation] = useState(DEFAULT_LOCATION);
   const [inputCity, setInputCity] = useState("");
+  const [showMap, setShowMap] = useState(false);
 
   // Update local time every minute
   useEffect(() => {
@@ -25,9 +32,8 @@ export default function Home() {
 
   // Fetch weather & AQI
   useEffect(() => {
-    async function fetchWeather() {
+    async function fetchWeather(coords = location) {
       try {
-        let coords = location;
         if (inputCity) {
           const geoRes = await fetch(`/api/geocode?name=${inputCity}`);
           const geoJson = await geoRes.json();
@@ -165,6 +171,86 @@ export default function Home() {
     return "Unknown";
   };
 
+  // ---- HANDLE MAP COORDINATE CLICK ----
+  // ---- HANDLE MAP COORDINATE CLICK ----
+  const handleMapClick = async ({ lat, lon }) => {
+    const coords = {
+      name: `Lat ${lat.toFixed(2)}, Lon ${lon.toFixed(2)}`,
+      lat,
+      lon,
+    };
+    setLocation(coords);
+    setInputCity("");
+
+    try {
+      // Fetch weather data
+      const weatherRes = await fetch(
+        `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=sunrise,sunset&hourly=temperature_2m,apparent_temperature,weather_code,precipitation,wind_speed_10m,relative_humidity_2m&current_weather=true&timezone=auto`
+      );
+      const weatherJson = await weatherRes.json();
+
+      // Fetch AQI
+      const aqiRes = await fetch(
+        `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}&hourly=us_aqi&timezone=auto`
+      );
+      const aqiJson = await aqiRes.json();
+
+      const latestAqi =
+        aqiJson?.hourly?.us_aqi?.[aqiJson.hourly.us_aqi.length - 1] || null;
+      const aqiLabel = getAqiLabel(latestAqi);
+
+      // Prepare hourly forecast (6 hours)
+      const nowHour = new Date().getHours();
+      const hourly = Array.from({ length: 6 }, (_, i) => {
+        const idx = Math.min(nowHour + i, weatherJson.hourly.time.length - 1);
+        const temp = Math.round(weatherJson.hourly.temperature_2m[idx]);
+        const feelsLike = Math.round(
+          weatherJson.hourly.apparent_temperature[idx]
+        );
+        const wind = Math.round(weatherJson.hourly.wind_speed_10m[idx]);
+        const humidity = weatherJson.hourly.relative_humidity_2m[idx];
+        const precipitation = weatherJson.hourly.precipitation[idx];
+
+        return {
+          time:
+            i === 0
+              ? "Now"
+              : `${new Date(weatherJson.hourly.time[idx]).getHours()}:00`,
+          temp,
+          feelsLike,
+          icon: weatherCodeToEmoji(weatherJson.hourly.weather_code[idx]),
+          precipitation,
+          wind,
+          humidity,
+          wci: calculateWCI({ temp, wind, humidity, precipitation }),
+        };
+      });
+
+      const wci = hourly[0].wci;
+
+      // Update all data at once
+      setData({
+        location: coords.name,
+        temperature: Math.round(weatherJson.current_weather.temperature),
+        feelsLike: hourly[0].feelsLike,
+        condition: weatherCodeToText(weatherJson.current_weather.weathercode),
+        wind: Math.round(weatherJson.current_weather.windspeed),
+        humidity: hourly[0].humidity,
+        precipitation: hourly[0].precipitation,
+        wci,
+        wciLabel: getWciLabel(wci),
+        hourly,
+        daily: weatherJson.daily,
+        aqi: latestAqi,
+        aqiLabel,
+      });
+
+      setLastUpdate(new Date().toLocaleTimeString());
+    } catch (err) {
+      console.error("Map click fetch error:", err);
+    }
+  };
+
   if (!data)
     return (
       <div className="flex items-center justify-center min-h-screen text-gray-500">
@@ -195,28 +281,39 @@ export default function Home() {
             Search
           </button>
         </div>
-        <div className="flex gap-6">
-          <button className="text-gray-700 font-medium hover:text-gray-900 transition">
-            Q&A
-          </button>
-          <button className="text-gray-700 font-medium hover:text-gray-900 transition">
-            About us
-          </button>
-        </div>
+
+        {/* Map Toggle Button */}
+        <button
+          onClick={() => setShowMap(!showMap)}
+          className="px-4 py-2 bg-emerald-500 text-white rounded-lg"
+        >
+          {showMap ? "Hide Map" : "Show Map"}
+        </button>
       </header>
 
+      {/* MAP */}
+      {showMap && (
+        <div className="w-full flex justify-center p-4">
+          <div className="w-full max-w-6xl">
+            <WeatherMap coords={location} setCoords={handleMapClick} />
+          </div>
+        </div>
+      )}
+
       {/* Main */}
-      <main className="flex-1 flex items-center justify-center p-6">
-        <div className="w-full max-w-6xl grid grid-cols-1 md:grid-cols-4 gap-6">
-          <div className="md:col-span-3 bg-white/80 backdrop-blur-sm rounded-2xl shadow-xl p-6">
+      <main className="flex-1 flex justify-center p-6">
+        <div className="w-full max-w-6xl flex flex-col gap-6">
+          {/* Weather Info */}
+          <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-xl p-6 flex flex-col gap-6">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6">
               <div>
                 <h1 className="text-3xl font-semibold tracking-tight">
                   Forecast Force
                 </h1>
                 <p className="mt-1 text-sm text-gray-500">
-                  {data.location} • {localTime}
+                  {location.name} • {localTime}
                 </p>
+
                 <div className="flex gap-4 mt-2 text-sm text-gray-400">
                   <div>
                     🌅 Sunrise:{" "}
@@ -235,32 +332,20 @@ export default function Home() {
                 </div>
               </div>
 
-              <motion.div
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                className={`rounded-xl p-4 sm:p-6 bg-gradient-to-r ${getWCIGradient(
-                  data.wci
-                )} shadow-md w-full md:w-72`}
-              >
-                <div className="flex items-baseline justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-white/90">
-                      Weather Comfort Index
-                    </p>
-                    <p className="text-xs text-white/80 mt-1">
-                      {data.wciLabel}
-                    </p>
-                  </div>
-                  <div className="text-4xl md:text-5xl font-bold text-white">
-                    {data.wci}/100
-                  </div>
-                </div>
-              </motion.div>
+              {/* Weather Comfort Index Box */}
+              <div className="w-full md:w-1/2 rounded-xl p-4 sm:p-6 bg-gradient-to-r from-emerald-400 to-sky-400 shadow-md flex flex-col items-center">
+                <p className="text-sm font-medium text-white/90">
+                  Weather Comfort Index
+                </p>
+                <p className="text-2xl font-bold mt-2">{data.wci}/100</p>
+                <p className="text-sm text-white/80 mt-1">{data.wciLabel}</p>
+              </div>
             </div>
 
-            {/* Main Weather */}
-            <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="col-span-2 rounded-xl p-6 bg-white shadow-sm border border-gray-100">
+            {/* Main Weather + AQI */}
+            <div className="flex flex-col md:flex-row gap-4">
+              {/* Weather Details */}
+              <div className="flex-1 rounded-xl p-6 bg-white shadow-sm border border-gray-100">
                 <div className="flex items-center gap-4">
                   <div className="text-6xl">{data.hourly[0].icon}</div>
                   <div>
@@ -277,79 +362,32 @@ export default function Home() {
                 <div className="mt-6 overflow-x-auto">
                   <div className="flex gap-3 items-center">
                     {data.hourly.map((h) => (
-                      <motion.div
+                      <div
                         key={h.time}
-                        whileHover={{ y: -6 }}
                         className="min-w-[84px] p-3 rounded-xl bg-gray-50 border border-gray-100 text-center"
                       >
                         <div className="text-sm text-gray-500">{h.time}</div>
                         <div className="mt-2 text-lg">{h.icon}</div>
                         <div className="text-sm mt-1">{h.temp}°</div>
-                        <div className="text-xs text-gray-400">
-                          Feels {h.feelsLike}°
-                        </div>
-                        <div className="h-2 w-full bg-gray-200 rounded-full mt-1 overflow-hidden">
-                          <div
-                            className={`h-full bg-gradient-to-r ${getWCIGradient(
-                              h.wci
-                            )}`}
-                            style={{ width: `${h.wci}%` }}
-                          ></div>
-                        </div>
-                      </motion.div>
+                      </div>
                     ))}
                   </div>
                 </div>
               </div>
 
-              {/* Sidebar */}
-              <div className="rounded-xl p-6 bg-white shadow-sm border border-gray-100">
-                <h3 className="text-sm font-medium text-gray-700">
-                  Today at a glance
-                </h3>
-                <div className="mt-4 grid grid-cols-2 gap-3 text-sm text-gray-600">
-                  <div>
-                    <div className="text-xs text-gray-400">Precipitation</div>
-                    <div className="font-semibold">{data.precipitation} mm</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-gray-400">Wind</div>
-                    <div className="font-semibold">{data.wind} kph</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-gray-400">Humidity</div>
-                    <div className="font-semibold">{data.humidity}%</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-gray-400">Comfort</div>
-                    <div className="font-semibold">{data.wciLabel}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-gray-400">
-                      Air Quality Index
-                    </div>
-                    <div className="font-semibold">
-                      {data.aqi ? `${data.aqi} (${data.aqiLabel})` : "N/A"}
-                    </div>
-                  </div>
+              {/* Air Quality Index Box */}
+              <div className="w-full md:w-1/2 rounded-xl p-6 bg-white shadow-sm border border-gray-100 flex flex-col justify-center items-center">
+                <p className="text-sm text-gray-500">Air Quality Index</p>
+                <div className="text-2xl font-bold mt-2">{data.aqi}</div>
+                <div className="text-sm text-gray-600 mt-1">
+                  {data.aqiLabel}
                 </div>
               </div>
             </div>
-          </div>
 
-          {/* Right Sidebar */}
-          <div className="hidden md:block">
-            <div className="rounded-2xl p-6 bg-white shadow-xl border border-gray-100 sticky top-6 flex flex-col items-center gap-4">
-              <div className="text-6xl">{data.hourly[0].icon}</div>
-              <div className="text-xl font-semibold">{data.temperature}°C</div>
-              <div className="text-sm text-gray-500">{data.condition}</div>
-              <div className="mt-3 w-full bg-gray-50 rounded-lg p-3 text-center text-sm">
-                <div className="font-medium">What to wear</div>
-                <div className="text-xs text-gray-400">
-                  Light jacket recommended • Comfortable for outdoor activities
-                </div>
-              </div>
-            </div>
+            <p className="mt-4 text-xs text-gray-400">
+              Last updated: {lastUpdate}
+            </p>
           </div>
         </div>
       </main>
